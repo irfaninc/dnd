@@ -475,6 +475,16 @@
       .filter(l => l.startsWith('http://') || l.startsWith('https://'));
   }
 
+  function resolveUrl(url) {
+    // Google Drive: /file/d/FILE_ID/
+    let m = url.match(/drive\.google\.com\/file\/d\/([a-zA-Z0-9_-]+)/);
+    if (m) return `https://drive.usercontent.google.com/uc?id=${m[1]}&export=download`;
+    // Google Drive: open?id= or uc?id=
+    m = url.match(/drive\.google\.com\/(?:open|uc)\?.*[?&]id=([a-zA-Z0-9_-]+)/);
+    if (m) return `https://drive.usercontent.google.com/uc?id=${m[1]}&export=download`;
+    return url;
+  }
+
   function getFileIcon(url) {
     const ext = url.split('?')[0].split('.').pop().toLowerCase();
     const map = {
@@ -501,8 +511,9 @@
     const links = parseLinks(linkInput.value);
     if (!links.length) { showToast('No valid URLs detected.'); return; }
 
-    links.forEach(url => {
+    links.forEach(rawUrl => {
       const id = ++idCounter;
+      const url = resolveUrl(rawUrl);
       items.push({ id, url, status: 'pending' });
       renderItem(id, url);
     });
