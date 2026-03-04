@@ -485,8 +485,14 @@
     return url;
   }
 
+  // URLs that require the browser to handle natively (encrypted, auth-gated, etc.)
+  function isBrowserOnly(url) {
+    return /mega\.nz|mega\.co\.nz/.test(url);
+  }
+
   function getFileIcon(url) {
-    const ext = url.split('?')[0].split('.').pop().toLowerCase();
+    if (/mega\.nz|mega\.co\.nz/.test(url)) return '🔒';
+    const ext = url.split('?')[0].split('#')[0].split('.').pop().toLowerCase();
     const map = {
       pdf: '📄', zip: '📦', rar: '📦', gz: '📦', tar: '📦',
       jpg: '🖼', jpeg: '🖼', png: '🖼', gif: '🖼', webp: '🖼', svg: '🖼',
@@ -514,7 +520,7 @@
     links.forEach(rawUrl => {
       const id = ++idCounter;
       const url = resolveUrl(rawUrl);
-      items.push({ id, url, status: 'pending' });
+      items.push({ id, url, status: 'pending', browserOnly: isBrowserOnly(url) });
       renderItem(id, url);
     });
 
@@ -633,8 +639,18 @@
     btnIcon.textContent = '↻';
     btnText.textContent = `Downloading 0 / ${pending.length}`;
 
-    let done = 0, failed = 0;
-    for (const item of pending) {
+    // Open browser-only links synchronously first (must happen before any await
+    // to keep the user gesture active, otherwise popups get blocked)
+    const browserItems = pending.filter(i => i.browserOnly);
+    browserItems.forEach(item => {
+      window.open(item.url, '_blank');
+      setStatus(item.id, 'done');
+      item.status = 'done';
+    });
+
+    let done = browserItems.length, failed = 0;
+    const fetchItems = pending.filter(i => !i.browserOnly);
+    for (const item of fetchItems) {
       await downloadFile(item);
       item.status === 'done' ? done++ : failed++;
       btnText.textContent = `Downloading ${done + failed} / ${pending.length}`;
