@@ -619,11 +619,11 @@
     btnIcon.textContent = '↻';
     btnText.textContent = `Downloading 0 / ${pending.length}`;
 
-    let done = 0;
+    let done = 0, failed = 0;
     for (const item of pending) {
       await downloadFile(item);
-      done++;
-      btnText.textContent = `Downloading ${done} / ${pending.length}`;
+      item.status === 'done' ? done++ : failed++;
+      btnText.textContent = `Downloading ${done + failed} / ${pending.length}`;
       await new Promise(r => setTimeout(r, 400));
     }
 
@@ -631,7 +631,9 @@
     btnIcon.className = '';
     btnIcon.textContent = '⬇';
     btnText.textContent = 'Download All';
-    showToast(`Done! ${done} file${done > 1 ? 's' : ''} downloaded.`);
+    if (done && !failed) showToast(`Done! ${done} file${done > 1 ? 's' : ''} downloaded.`);
+    else if (done && failed) showToast(`${done} downloaded, ${failed} failed.`);
+    else showToast(`All ${failed} download${failed > 1 ? 's' : ''} failed.`);
   }
 
   function showToast(msg) {
