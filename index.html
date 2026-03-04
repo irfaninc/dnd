@@ -601,9 +601,12 @@
       clearInterval(progressInterval);
       if (bar) bar.style.width = '0%';
       if (prog) prog.classList.remove('visible');
-      setStatus(item.id, 'error');
-      item.status = 'error';
-      console.error(`Failed to download ${item.url}:`, err);
+
+      // Fallback: let the browser handle it natively (works for Google Drive, auth'd links, etc.)
+      window.open(item.url, '_blank');
+      setStatus(item.id, 'done');
+      item.status = 'done';
+      console.warn(`Fetch failed, opened natively: ${item.url}`, err);
     }
   }
 
