@@ -476,41 +476,78 @@
   }
 
   function resolveUrl(url) {
-    // Google Drive: /file/d/FILE_ID/
     let m = url.match(/drive\.google\.com\/file\/d\/([a-zA-Z0-9_-]+)/);
     if (m) return `https://drive.usercontent.google.com/uc?id=${m[1]}&export=download`;
-    // Google Drive: open?id= or uc?id=
     m = url.match(/drive\.google\.com\/(?:open|uc)\?.*[?&]id=([a-zA-Z0-9_-]+)/);
     if (m) return `https://drive.usercontent.google.com/uc?id=${m[1]}&export=download`;
     return url;
   }
 
-  // URLs that require the browser to handle natively (encrypted, auth-gated, etc.)
-  function isBrowserOnly(url) {
-    return /mega\.nz|mega\.co\.nz/.test(url);
+  function formatBytes(bytes) {
+    if (!bytes) return '';
+    if (bytes < 1024) return bytes + ' B';
+    if (bytes < 1048576) return (bytes / 1024).toFixed(1) + ' KB';
+    if (bytes < 1073741824) return (bytes / 1048576).toFixed(1) + ' MB';
+    return (bytes / 1073741824).toFixed(2) + ' GB';
   }
 
-  function getFileIcon(url) {
-    if (/mega\.nz|mega\.co\.nz/.test(url)) return '🔒';
+  function getIconFromMime(mime) {
+    if (!mime) return null;
+    const t = mime.split(';')[0].trim().toLowerCase();
+    if (t === 'application/pdf') return '📄';
+    if (t.startsWith('image/')) return '🖼';
+    if (t.startsWith('video/')) return '🎬';
+    if (t.startsWith('audio/')) return '🎵';
+    if (t.includes('zip') || t.includes('x-rar') || t.includes('x-tar') ||
+        t.includes('gzip') || t.includes('x-7z') || t.includes('compressed')) return '📦';
+    if (t.includes('spreadsheet') || t.includes('excel') || t === 'text/csv') return '📊';
+    if (t.includes('wordprocessing') || t.includes('msword')) return '📝';
+    if (t.includes('presentation') || t.includes('powerpoint')) return '📋';
+    if (t === 'application/json' || t.includes('xml')) return '🔢';
+    if (t.startsWith('text/')) return '📝';
+    return '📁';
+  }
+
+  function getIconFromUrl(url) {
     const ext = url.split('?')[0].split('#')[0].split('.').pop().toLowerCase();
     const map = {
-      pdf: '📄', zip: '📦', rar: '📦', gz: '📦', tar: '📦',
+      pdf: '📄', zip: '📦', rar: '📦', gz: '📦', tar: '📦', '7z': '📦',
       jpg: '🖼', jpeg: '🖼', png: '🖼', gif: '🖼', webp: '🖼', svg: '🖼',
-      mp4: '🎬', mov: '🎬', avi: '🎬', mkv: '🎬',
-      mp3: '🎵', wav: '🎵', flac: '🎵',
+      mp4: '🎬', mov: '🎬', avi: '🎬', mkv: '🎬', webm: '🎬',
+      mp3: '🎵', wav: '🎵', flac: '🎵', ogg: '🎵', m4a: '🎵',
       doc: '📝', docx: '📝', xls: '📊', xlsx: '📊', ppt: '📋', pptx: '📋',
-      csv: '📊', json: '🔢', xml: '🔢', sql: '🗄',
+      csv: '📊', json: '🔢', xml: '🔢', sql: '🗄', txt: '📝', md: '📝',
       exe: '⚙️', dmg: '💿', iso: '💿',
     };
     return map[ext] || '📁';
   }
 
-  function getFileName(url) {
+  function getFilenameFromResponse(response, fallbackUrl) {
+    const cd = response.headers.get('content-disposition');
+    if (cd) {
+      // RFC 5987: filename*=UTF-8''encoded-name
+      let m = cd.match(/filename\*=(?:UTF-8''|utf-8'')([^;\s]+)/i);
+      if (m) return decodeURIComponent(m[1]);
+      // Standard: filename="name" or filename=name
+      m = cd.match(/filename="([^"]+)"/i) || cd.match(/filename=([^;\s\r\n]+)/i);
+      if (m) return m[1].trim();
+    }
+    // Derive from URL path
     try {
-      const path = new URL(url).pathname;
-      const name = path.split('/').pop();
-      return name || 'file';
-    } catch { return 'file'; }
+      const name = new URL(fallbackUrl).pathname.split('/').filter(Boolean).pop();
+      if (name && name.includes('.')) return name;
+    } catch {}
+    // Last resort: infer extension from Content-Type
+    const mime = (response.headers.get('content-type') || '').split(';')[0].trim();
+    const extMap = {
+      'image/jpeg': 'jpg', 'image/png': 'png', 'image/gif': 'gif', 'image/webp': 'webp',
+      'image/svg+xml': 'svg', 'video/mp4': 'mp4', 'video/webm': 'webm',
+      'audio/mpeg': 'mp3', 'audio/ogg': 'ogg', 'audio/wav': 'wav',
+      'application/pdf': 'pdf', 'application/zip': 'zip',
+      'application/json': 'json', 'text/plain': 'txt', 'text/csv': 'csv',
+    };
+    const ext = extMap[mime];
+    return ext ? `download.${ext}` : 'download';
   }
 
   function addToQueue() {
@@ -520,7 +557,7 @@
     links.forEach(rawUrl => {
       const id = ++idCounter;
       const url = resolveUrl(rawUrl);
-      items.push({ id, url, status: 'pending', browserOnly: isBrowserOnly(url) });
+      items.push({ id, url, status: 'pending' });
       renderItem(id, url);
     });
 
@@ -537,10 +574,10 @@
     el.className = 'queue-item';
     el.id = `item-${id}`;
     el.innerHTML = `
-      <div class="file-icon">${getFileIcon(url)}</div>
+      <div class="file-icon" id="icon-${id}">${getIconFromUrl(url)}</div>
       <div class="file-info">
         <div class="file-url" title="${url}">${url}</div>
-        <div class="file-meta">${getFileName(url)}</div>
+        <div class="file-meta" id="meta-${id}">—</div>
         <div class="progress-bar-wrap" id="prog-${id}">
           <div class="progress-bar" id="bar-${id}"></div>
         </div>
@@ -582,31 +619,62 @@
 
   async function downloadFile(item) {
     setStatus(item.id, 'downloading');
-    const prog = document.getElementById(`prog-${item.id}`);
-    const bar = document.getElementById(`bar-${item.id}`);
+    const prog   = document.getElementById(`prog-${item.id}`);
+    const bar    = document.getElementById(`bar-${item.id}`);
+    const iconEl = document.getElementById(`icon-${item.id}`);
+    const metaEl = document.getElementById(`meta-${item.id}`);
     if (prog) prog.classList.add('visible');
 
-    // Animate progress bar
-    let progress = 0;
-    const progressInterval = setInterval(() => {
-      progress = Math.min(progress + Math.random() * 15, 90);
-      if (bar) bar.style.width = progress + '%';
-    }, 200);
-
     const useProxy = document.getElementById('proxyToggle').checked;
-    const fetchUrl = useProxy ? `https://corsproxy.io/?url=${encodeURIComponent(item.url)}` : item.url;
+    const fetchUrl = useProxy
+      ? `https://corsproxy.io/?url=${encodeURIComponent(item.url)}`
+      : item.url;
 
     try {
       const response = await fetch(fetchUrl);
       if (!response.ok) throw new Error(`HTTP ${response.status}`);
 
-      const blob = await response.blob();
-      clearInterval(progressInterval);
-      if (bar) bar.style.width = '100%';
+      const mime          = (response.headers.get('content-type') || '').split(';')[0].trim();
+      const contentLength = parseInt(response.headers.get('content-length') || '0', 10);
+      const filename      = getFilenameFromResponse(response, item.url);
 
-      const a = document.createElement('a');
-      a.href = URL.createObjectURL(blob);
-      a.download = getFileName(item.url);
+      // Update icon and filename now that we know what the file actually is
+      if (iconEl) iconEl.textContent = getIconFromMime(mime) || getIconFromUrl(filename);
+      if (metaEl) metaEl.textContent = filename + (contentLength ? ` · ${formatBytes(contentLength)}` : '');
+
+      // Stream with real progress + live speed readout
+      const reader = response.body.getReader();
+      const chunks = [];
+      let received  = 0;
+      const t0      = Date.now();
+
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        chunks.push(value);
+        received += value.length;
+
+        if (bar) {
+          bar.style.width = contentLength
+            ? (received / contentLength * 100) + '%'
+            : Math.min(90, received / 1048576 * 8) + '%';
+        }
+
+        const elapsed = Math.max((Date.now() - t0) / 1000, 0.001);
+        const speed   = formatBytes(received / elapsed) + '/s';
+        if (metaEl) metaEl.textContent = contentLength
+          ? `${filename} · ${formatBytes(received)} / ${formatBytes(contentLength)} · ${speed}`
+          : `${filename} · ${formatBytes(received)} · ${speed}`;
+      }
+
+      if (bar) bar.style.width = '100%';
+      const finalSize = contentLength || received;
+      if (metaEl) metaEl.textContent = `${filename} · ${formatBytes(finalSize)}`;
+
+      const blob = new Blob(chunks, { type: mime || 'application/octet-stream' });
+      const a    = document.createElement('a');
+      a.href     = URL.createObjectURL(blob);
+      a.download = filename;
       document.body.appendChild(a);
       a.click();
       document.body.removeChild(a);
@@ -615,11 +683,10 @@
       setStatus(item.id, 'done');
       item.status = 'done';
     } catch (err) {
-      clearInterval(progressInterval);
-      if (bar) bar.style.width = '0%';
-      if (prog) prog.classList.remove('visible');
+      if (prog) { prog.classList.remove('visible'); if (bar) bar.style.width = '0%'; }
+      if (metaEl) metaEl.textContent = err.message;
 
-      // Fallback: let the browser handle it natively (works for Google Drive, auth'd links, etc.)
+      // Fallback: open in browser tab (handles CORS-blocked, auth-gated, Google Drive etc.)
       window.open(item.url, '_blank');
       setStatus(item.id, 'done');
       item.status = 'done';
@@ -631,7 +698,7 @@
     const pending = items.filter(i => i.status === 'pending' || i.status === 'error');
     if (!pending.length) { showToast('Nothing to download.'); return; }
 
-    const btn = document.getElementById('downloadBtn');
+    const btn     = document.getElementById('downloadBtn');
     const btnIcon = document.getElementById('downloadBtnIcon');
     const btnText = document.getElementById('downloadBtnText');
     btn.disabled = true;
@@ -639,22 +706,12 @@
     btnIcon.textContent = '↻';
     btnText.textContent = `Downloading 0 / ${pending.length}`;
 
-    // Open browser-only links synchronously first (must happen before any await
-    // to keep the user gesture active, otherwise popups get blocked)
-    const browserItems = pending.filter(i => i.browserOnly);
-    browserItems.forEach(item => {
-      window.open(item.url, '_blank');
-      setStatus(item.id, 'done');
-      item.status = 'done';
-    });
-
-    let done = browserItems.length, failed = 0;
-    const fetchItems = pending.filter(i => !i.browserOnly);
-    for (const item of fetchItems) {
+    let done = 0, failed = 0;
+    for (const item of pending) {
       await downloadFile(item);
       item.status === 'done' ? done++ : failed++;
       btnText.textContent = `Downloading ${done + failed} / ${pending.length}`;
-      await new Promise(r => setTimeout(r, 400));
+      await new Promise(r => setTimeout(r, 300));
     }
 
     btn.disabled = false;
